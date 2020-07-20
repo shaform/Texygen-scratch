@@ -33,7 +33,7 @@ def get_tokenlized(file):
     tokenlized = list()
     with open(file) as raw:
         for text in raw:
-            text = nltk.word_tokenize(text.lower())
+            text = text.strip().split()
             tokenlized.append(text)
     return tokenlized
 
@@ -69,7 +69,5 @@ def text_precess(train_text_loc, test_text_loc=None):
         sequence_len = len(max(train_tokens, key=len))
     else:
         sequence_len = max(len(max(train_tokens, key=len)), len(max(test_tokens, key=len)))
-    with open('save/eval_data.txt', 'w') as outfile:
-        outfile.write(text_to_code(test_tokens, word_index_dict, sequence_len))
 
     return sequence_len, len(word_index_dict) + 1
