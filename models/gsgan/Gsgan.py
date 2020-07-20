@@ -1,16 +1,16 @@
 import json
 from time import time
 
+import tensorflow as tf
+import numpy as np
+
 from models.Gan import Gan
 from models.gsgan.GsganDataLoader import DataLoader, DisDataloader
 from models.gsgan.GsganDiscriminator import Discriminator
 from models.gsgan.GsganGenerator import Generator
 from utils.metrics.Bleu import Bleu
-from utils.metrics.Cfg import Cfg
 from utils.metrics.EmbSim import EmbSim
 from utils.metrics.Nll import Nll
-from utils.oracle.OracleCfg import OracleCfg
-from utils.oracle.OracleLstm import OracleLstm
 from utils.text_process import *
 from utils.utils import *
 
@@ -34,29 +34,6 @@ class Gsgan(Gan):
         self.oracle_file = 'save/oracle.txt'
         self.generator_file = 'save/generator.txt'
         self.test_file = 'save/test_file.txt'
-
-    def init_oracle_trainng(self, oracle=None):
-        if oracle is None:
-            oracle = OracleLstm(num_vocabulary=self.vocab_size, batch_size=self.batch_size, emb_dim=self.emb_dim,
-                                hidden_dim=self.hidden_dim, sequence_length=self.sequence_length,
-                                start_token=self.start_token)
-        self.set_oracle(oracle)
-
-        discriminator = Discriminator(sequence_length=self.sequence_length, num_classes=2, vocab_size=self.vocab_size,
-                                      hidden_unit=20, embedding_size=self.emb_dim, filter_sizes=self.filter_size, batch_size = self.batch_size,
-                                      num_filters=self.num_filters, non_static=True,
-                                      l2_reg_lambda=self.l2_reg_lambda)
-        self.set_discriminator(discriminator)
-        generator = Generator(num_vocabulary=self.vocab_size, batch_size=self.batch_size, sess=self.sess,
-                              hidden_dim=self.hidden_dim, sequence_length=self.sequence_length, discriminator=discriminator,
-                              start_token=self.start_token)
-        self.set_generator(generator)
-
-        gen_dataloader = DataLoader(batch_size=self.batch_size, seq_length=self.sequence_length)
-        oracle_dataloader = DataLoader(batch_size=self.batch_size, seq_length=self.sequence_length)
-        dis_dataloader = DisDataloader(batch_size=self.batch_size, seq_length=self.sequence_length)
-
-        self.set_data_loader(gen_loader=gen_dataloader, dis_loader=dis_dataloader, oracle_loader=oracle_dataloader)
 
     def init_metric(self):
 
@@ -114,147 +91,6 @@ class Gsgan(Gan):
             self.log.write('\n')
             return scores
         return super().evaluate()
-
-    def train_oracle(self):
-        self.init_oracle_trainng()
-        self.init_metric()
-        self.sess.run(tf.global_variables_initializer())
-
-        self.pre_epoch_num = 0
-        self.adversarial_epoch_num = 100
-        self.log = open('experiment-log-gsgan.csv', 'w')
-        generate_samples(self.sess, self.oracle, self.batch_size, self.generate_num, self.oracle_file)
-        generate_samples(self.sess, self.generator, self.batch_size, self.generate_num, self.generator_file)
-        self.gen_data_loader.create_batches(self.oracle_file)
-        self.oracle_data_loader.create_batches(self.generator_file)
-
-        _ = self.sess.run(self.generator.start_token)
-        print('start pre-train generator:')
-        for epoch in range(self.pre_epoch_num):
-            start = time()
-            loss = pre_train_epoch(self.sess, self.generator, self.gen_data_loader)
-            end = time()
-            print('epoch:' + str(self.epoch) + '\t time:' + str(end - start))
-            self.add_epoch()
-            if epoch % 5 == 0:
-                generate_samples(self.sess, self.generator, self.batch_size, self.generate_num, self.generator_file)
-                self.evaluate()
-
-        print('start pre-train discriminator:')
-        self.reset_epoch()
-        for epoch in range(self.pre_epoch_num):
-            print('epoch:' + str(epoch))
-            self.train_discriminator()
-
-        self.reset_epoch()
-        print('adversarial training:')
-        for epoch in range(self.adversarial_epoch_num):
-            # print('epoch:' + str(epoch))
-            start = time()
-            for index in range(10):
-                self.generator.unsupervised_train(self.sess)
-            end = time()
-            self.add_epoch()
-            print('epoch:' + str(self.epoch) + '\t time:' + str(end - start))
-            if epoch % 5 == 0 or epoch == self.adversarial_epoch_num - 1:
-                generate_samples(self.sess, self.generator, self.batch_size, self.generate_num, self.generator_file)
-                self.evaluate()
-
-            for _ in range(15):
-                self.train_discriminator()
-
-    def init_cfg_training(self, grammar=None):
-        oracle = OracleCfg(sequence_length=self.sequence_length, cfg_grammar=grammar)
-        self.set_oracle(oracle)
-        self.oracle.generate_oracle()
-        self.vocab_size = self.oracle.vocab_size + 1
-
-
-        discriminator = Discriminator(sequence_length=self.sequence_length, num_classes=2, vocab_size=self.vocab_size,
-                                      hidden_unit=20, embedding_size=self.emb_dim, filter_sizes=self.filter_size, batch_size = self.batch_size,
-                                      num_filters=self.num_filters, non_static=True,
-                                      l2_reg_lambda=self.l2_reg_lambda)
-        self.set_discriminator(discriminator)
-        generator = Generator(num_vocabulary=self.vocab_size, batch_size=self.batch_size, sess=self.sess,
-                              hidden_dim=self.hidden_dim, sequence_length=self.sequence_length, discriminator=discriminator,
-                              start_token=self.start_token)
-        self.set_generator(generator)
-
-        gen_dataloader = DataLoader(batch_size=self.batch_size, seq_length=self.sequence_length)
-        oracle_dataloader = DataLoader(batch_size=self.batch_size, seq_length=self.sequence_length)
-        dis_dataloader = DisDataloader(batch_size=self.batch_size, seq_length=self.sequence_length)
-        self.set_data_loader(gen_loader=gen_dataloader, dis_loader=dis_dataloader, oracle_loader=oracle_dataloader)
-        return oracle.wi_dict, oracle.iw_dict
-
-    def init_cfg_metric(self, grammar=None):
-        cfg = Cfg(test_file=self.test_file, cfg_grammar=grammar)
-        self.add_metric(cfg)
-
-    def train_cfg(self):
-        cfg_grammar = """
-          S -> S PLUS x | S SUB x |  S PROD x | S DIV x | x | '(' S ')'
-          PLUS -> '+'
-          SUB -> '-'
-          PROD -> '*'
-          DIV -> '/'
-          x -> 'x' | 'y'
-        """
-
-        wi_dict_loc, iw_dict_loc = self.init_cfg_training(cfg_grammar)
-        with open(iw_dict_loc, 'r') as file:
-            iw_dict = json.load(file)
-
-        def get_cfg_test_file(dict=iw_dict):
-            with open(self.generator_file, 'r') as file:
-                codes = get_tokenlized(self.generator_file)
-            with open(self.test_file, 'w') as outfile:
-                outfile.write(code_to_text(codes=codes, dictionary=dict))
-
-        self.init_cfg_metric(grammar=cfg_grammar)
-        self.sess.run(tf.global_variables_initializer())
-
-        self.pre_epoch_num = 0
-        self.adversarial_epoch_num = 100
-        self.log = open('experiment-log-gsgan-cfg.csv', 'w')
-        generate_samples(self.sess, self.generator, self.batch_size, self.generate_num, self.generator_file)
-        self.gen_data_loader.create_batches(self.oracle_file)
-        self.oracle_data_loader.create_batches(self.generator_file)
-        print('start pre-train generator:')
-        for epoch in range(self.pre_epoch_num):
-            start = time()
-            loss = pre_train_epoch(self.sess, self.generator, self.gen_data_loader)
-            end = time()
-            print('epoch:' + str(self.epoch) + '\t time:' + str(end - start))
-            self.add_epoch()
-            if epoch % 5 == 0:
-                generate_samples(self.sess, self.generator, self.batch_size, self.generate_num, self.generator_file)
-                get_cfg_test_file()
-                self.evaluate()
-
-        print('start pre-train discriminator:')
-        self.reset_epoch()
-        for epoch in range(self.pre_epoch_num * 3):
-            print('epoch:' + str(epoch))
-            self.train_discriminator()
-
-        self.reset_epoch()
-        print('adversarial training:')
-        for epoch in range(self.adversarial_epoch_num):
-            # print('epoch:' + str(epoch))
-            start = time()
-            for index in range(10):
-                self.generator.unsupervised_train(self.sess)
-            end = time()
-            self.add_epoch()
-            print('epoch:' + str(self.epoch) + '\t time:' + str(end - start))
-            if epoch % 5 == 0 or epoch == self.adversarial_epoch_num - 1:
-                generate_samples(self.sess, self.generator, self.batch_size, self.generate_num, self.generator_file)
-                get_cfg_test_file()
-                self.evaluate()
-
-            for _ in range(15):
-                self.train_discriminator()
-
 
     def init_real_trainng(self, data_loc=None):
         from utils.text_process import text_precess, text_to_code

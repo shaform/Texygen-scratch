@@ -1,12 +1,14 @@
 from time import time
 
+import tensorflow as tf
+import numpy as np
+
 from models.Gan import Gan
 from models.mle.MleDataLoader import DataLoader
 from models.mle.MleGenerator import Generator
 from utils.metrics.Bleu import Bleu
 from utils.metrics.EmbSim import EmbSim
 from utils.metrics.Nll import Nll
-from utils.oracle.OracleLstm import OracleLstm
 from utils.utils import *
 
 
@@ -29,24 +31,6 @@ class Mle(Gan):
         self.oracle_file = 'save/oracle.txt'
         self.generator_file = 'save/generator.txt'
         self.test_file = 'save/test_file.txt'
-
-    def init_oracle_trainng(self, oracle=None):
-        if oracle is None:
-            oracle = OracleLstm(num_vocabulary=self.vocab_size, batch_size=self.batch_size, emb_dim=self.emb_dim,
-                                hidden_dim=self.hidden_dim, sequence_length=self.sequence_length,
-                                start_token=self.start_token)
-        self.set_oracle(oracle)
-
-        generator = Generator(num_vocabulary=self.vocab_size, batch_size=self.batch_size, emb_dim=self.emb_dim,
-                              hidden_dim=self.hidden_dim, sequence_length=self.sequence_length,
-                              start_token=self.start_token)
-        self.set_generator(generator)
-
-        gen_dataloader = DataLoader(batch_size=self.batch_size, seq_length=self.sequence_length)
-        oracle_dataloader = DataLoader(batch_size=self.batch_size, seq_length=self.sequence_length)
-        dis_dataloader = None
-
-        self.set_data_loader(gen_loader=gen_dataloader, dis_loader=dis_dataloader, oracle_loader=oracle_dataloader)
 
     def init_metric(self):
         nll = Nll(data_loader=self.oracle_data_loader, rnn=self.oracle, sess=self.sess)
@@ -87,31 +71,6 @@ class Mle(Gan):
             self.log.write('\n')
             return scores
         return super().evaluate()
-
-    def train_oracle(self):
-        self.init_oracle_trainng()
-        self.sess.run(tf.global_variables_initializer())
-
-        self.pre_epoch_num = 80
-        self.log = open('experiment-log-mle.csv', 'w')
-        generate_samples(self.sess, self.oracle, self.batch_size, self.generate_num, self.oracle_file)
-        generate_samples(self.sess, self.generator, self.batch_size, self.generate_num, self.generator_file)
-        self.gen_data_loader.create_batches(self.oracle_file)
-        self.oracle_data_loader.create_batches(self.generator_file)
-        self.init_metric()
-
-        print('start pre-train generator:')
-        for epoch in range(self.pre_epoch_num):
-            start = time()
-            loss = pre_train_epoch(self.sess, self.generator, self.gen_data_loader)
-            end = time()
-            print('epoch:' + str(self.epoch) + '\t time:' + str(end - start))
-            self.add_epoch()
-            if epoch % 5 == 0:
-                self.evaluate()
-        generate_samples(self.sess, self.generator, self.batch_size, self.generate_num, self.generator_file)
-        return
-
 
     def init_real_trainng(self, data_loc=None):
         from utils.text_process import text_precess, text_to_code
@@ -167,6 +126,3 @@ class Mle(Gan):
                 get_real_test_file()
                 self.evaluate()
         generate_samples(self.sess, self.generator, self.batch_size, self.generate_num, self.generator_file)
-
-
-
